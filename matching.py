@@ -1,23 +1,22 @@
 """
 matching.py
-Text-based matching engine.
+Combined text + facial matching engine.
 
 Compares a missing_persons record against an unidentified_bodies record
 and returns a 0-100 similarity score based on:
-  - age closeness
-  - gender match
-  - location similarity (fuzzy string match)
-  - physical features / distinguishing marks similarity (fuzzy string match)
+  - TEXT: age closeness, gender match, location/marks/clothing fuzzy similarity
+  - FACE: DeepFace facial similarity between the two uploaded photos
 
-This is intentionally simple and explainable — every score is easy to
-justify in a viva, which matters more for a minor project than a fancier
-black-box model.
+The two are combined into one final weighted score. Facial comparison is
+wrapped in error handling — if a photo is missing, corrupted, or no face
+is detected, we fall back to text-only for that pair instead of crashing.
 """
 from rapidfuzz import fuzz
+from deepface import DeepFace
+import os
 
-# Weights for each component. Must sum to 1.0 — tune these if you want
-# one signal (e.g. distinguishing marks) to matter more than another.
-WEIGHTS = {
+# ---------- TEXT SCORE WEIGHTS (within the text score itself, sums to 1.0) ----------
+TEXT_WEIGHTS = {
     "age": 0.20,
     "gender": 0.15,
     "location": 0.25,
@@ -25,15 +24,18 @@ WEIGHTS = {
     "clothing": 0.15,
 }
 
+# ---------- OVERALL COMBINATION: how much text vs face counts in the final score ----------
+OVERALL_WEIGHTS = {
+    "text": 0.5,
+    "face": 0.5,
+}
+
+FACE_MODEL = "VGG-Face"  # same model we validated in test_deepface.py
+
 
 def score_age(age1, age2, max_diff=15):
-    """
-    Returns 0-100. Full score if ages match exactly, decreasing linearly
-    up to max_diff years apart, 0 beyond that.
-    Handles None gracefully (missing data = neutral middling score).
-    """
     if age1 is None or age2 is None:
-        return 50  # neutral score when age data is missing
+        return 50
     diff = abs(age1 - age2)
     if diff >= max_diff:
         return 0
@@ -41,7 +43,6 @@ def score_age(age1, age2, max_diff=15):
 
 
 def score_gender(gender1, gender2):
-    """Binary-ish: 100 if match, 0 if a clear mismatch, 50 if either is Unknown."""
     if not gender1 or not gender2:
         return 50
     if gender1 == "Unknown" or gender2 == "Unknown":
@@ -50,21 +51,13 @@ def score_gender(gender1, gender2):
 
 
 def score_text_similarity(text1, text2):
-    """
-    Fuzzy string similarity for free-text fields (location, marks, clothing).
-    Uses token_sort_ratio so word order doesn't matter
-    (e.g. "scar left cheek" vs "left cheek has a scar" still score high).
-    """
     if not text1 or not text2:
         return 0
     return round(fuzz.token_sort_ratio(str(text1).lower(), str(text2).lower()), 2)
 
 
 def compute_text_score(missing_person: dict, unidentified_body: dict) -> dict:
-    """
-    Takes two dict-like records (rows from the DB) and returns a breakdown
-    plus a final weighted score out of 100.
-    """
+    """Returns a breakdown dict plus 'text_final_score' (0-100)."""
     age_score = score_age(missing_person.get("age"), unidentified_body.get("approx_age"))
     gender_score = score_gender(missing_person.get("gender"), unidentified_body.get("gender"))
     location_score = score_text_similarity(
@@ -77,12 +70,12 @@ def compute_text_score(missing_person: dict, unidentified_body: dict) -> dict:
         missing_person.get("clothing_description"), unidentified_body.get("clothing_description")
     )
 
-    final_score = (
-        age_score * WEIGHTS["age"]
-        + gender_score * WEIGHTS["gender"]
-        + location_score * WEIGHTS["location"]
-        + marks_score * WEIGHTS["marks"]
-        + clothing_score * WEIGHTS["clothing"]
+    text_final_score = (
+        age_score * TEXT_WEIGHTS["age"]
+        + gender_score * TEXT_WEIGHTS["gender"]
+        + location_score * TEXT_WEIGHTS["location"]
+        + marks_score * TEXT_WEIGHTS["marks"]
+        + clothing_score * TEXT_WEIGHTS["clothing"]
     )
 
     return {
@@ -91,6 +84,62 @@ def compute_text_score(missing_person: dict, unidentified_body: dict) -> dict:
         "location_score": location_score,
         "marks_score": marks_score,
         "clothing_score": clothing_score,
+        "text_final_score": round(text_final_score, 2),
+    }
+
+
+def compute_face_score(photo_path1: str, photo_path2: str):
+    """
+    Returns a 0-100 facial similarity score, or None if comparison wasn't
+    possible (missing file, no face detected, corrupted image, etc).
+    None is handled gracefully by the caller — it just falls back to text-only.
+    """
+    if not photo_path1 or not photo_path2:
+        return None
+    if not os.path.exists(photo_path1) or not os.path.exists(photo_path2):
+        return None
+
+    try:
+        result = DeepFace.verify(
+            img1_path=photo_path1,
+            img2_path=photo_path2,
+            model_name=FACE_MODEL,
+            enforce_detection=False,  # don't crash on hard-to-detect faces —
+                                      # important for real-world photo quality
+        )
+        distance = result["distance"]
+        threshold = result["threshold"]
+        similarity_pct = max(0, round((1 - (distance / (threshold * 2))) * 100, 2))
+        return similarity_pct
+    except Exception:
+        # Any DeepFace/OpenCV failure (corrupted file, no face found, etc.)
+        # degrades gracefully to "no face score available" rather than crashing
+        # the whole matching run.
+        return None
+
+
+def compute_combined_score(missing_person: dict, unidentified_body: dict) -> dict:
+    """
+    Full breakdown: text sub-scores + text_final_score + face_score + final_score.
+    If face_score is None (comparison failed), final_score falls back to
+    text_final_score alone so one bad photo doesn't zero out a real match.
+    """
+    text_result = compute_text_score(missing_person, unidentified_body)
+    face_score = compute_face_score(
+        missing_person.get("photo_path"), unidentified_body.get("photo_path")
+    )
+
+    if face_score is None:
+        final_score = text_result["text_final_score"]
+    else:
+        final_score = (
+            text_result["text_final_score"] * OVERALL_WEIGHTS["text"]
+            + face_score * OVERALL_WEIGHTS["face"]
+        )
+
+    return {
+        **text_result,
+        "face_score": face_score,  # None if unavailable — shown as "N/A" in UI
         "final_score": round(final_score, 2),
     }
 
@@ -100,11 +149,11 @@ def find_top_matches_for_missing_person(missing_person: dict, unidentified_bodie
     missing_person: a single dict (one row)
     unidentified_bodies: list of dicts (all candidate rows)
     Returns a list of dicts sorted by final_score descending, each including
-    the original unidentified_body data plus its score breakdown.
+    the original unidentified_body data plus its full score breakdown.
     """
     results = []
     for body in unidentified_bodies:
-        breakdown = compute_text_score(missing_person, body)
+        breakdown = compute_combined_score(missing_person, body)
         results.append({**body, **breakdown})
 
     results.sort(key=lambda r: r["final_score"], reverse=True)

@@ -1,10 +1,11 @@
 """
-Matching Dashboard — pick a missing person, run the text-matching engine
-against all unidentified body records, and see the ranked results.
+Matching Dashboard — pick a missing person, run the combined text + facial
+matching engine against all unidentified body records, and see the ranked
+results with a full score breakdown.
 
-This is Week 2's core deliverable. Facial matching (DeepFace) will be
-added as a second score alongside this one later — for now this page
-proves the text-matching logic works end to end.
+Note: facial comparison can take a few seconds per pair the first time
+(DeepFace loading the model), so this page may feel slower than before —
+that's expected, not a bug.
 """
 import streamlit as st
 from database import fetch_all_missing_persons_as_dicts, fetch_all_unidentified_bodies_as_dicts, save_match
@@ -76,8 +77,12 @@ with col2:
                     st.write(f"**Marks:** {match.get('distinguishing_marks') or '—'}")
                     st.write(f"**Clothing:** {match.get('clothing_description') or '—'}")
 
+                    face_display = match["face_score"] if match["face_score"] is not None else "N/A (no face detected or photo missing)"
                     st.caption(
-                        f"Score breakdown — Age: {match['age_score']} | "
+                        f"Text score: {match['text_final_score']}  |  Face score: {face_display}"
+                    )
+                    st.caption(
+                        f"Text breakdown — Age: {match['age_score']} | "
                         f"Gender: {match['gender_score']} | "
                         f"Location: {match['location_score']} | "
                         f"Marks: {match['marks_score']} | "
@@ -88,8 +93,8 @@ with col2:
                     save_match(
                         missing_person_id=selected_person["id"],
                         unidentified_body_id=match["id"],
-                        text_score=score,
-                        face_score=0,  # facial matching not wired in yet — Week 2 next step
+                        text_score=match["text_final_score"],
+                        face_score=match["face_score"] if match["face_score"] is not None else 0,
                         final_score=score,
                     )
                     st.success("Saved to matches table. Staff can confirm this later.")
