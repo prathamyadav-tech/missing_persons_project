@@ -178,6 +178,37 @@ def fetch_top_matches(missing_person_id: int, limit: int = 5) -> pd.DataFrame:
     return df
 
 
+def fetch_all_saved_matches(confirmed: bool = None) -> pd.DataFrame:
+    """
+    Returns every saved candidate match (from the 'matches' table) joined
+    with basic info from both sides, so the dashboard can show a review queue.
+    Pass confirmed=False to see only pending ones, confirmed=True for
+    already-confirmed ones, or leave as None to see everything.
+    """
+    conn = get_connection()
+    query = """
+        SELECT m.id AS match_id, m.text_score, m.face_score, m.final_score,
+               m.confirmed, m.created_at,
+               mp.id AS missing_person_id, mp.name AS missing_name,
+               mp.age AS missing_age, mp.gender AS missing_gender,
+               mp.photo_path AS missing_photo,
+               ub.id AS unidentified_body_id, ub.approx_age AS body_age,
+               ub.gender AS body_gender, ub.found_location,
+               ub.photo_path AS body_photo
+        FROM matches m
+        JOIN missing_persons mp ON m.missing_person_id = mp.id
+        JOIN unidentified_bodies ub ON m.unidentified_body_id = ub.id
+    """
+    params = ()
+    if confirmed is not None:
+        query += " WHERE m.confirmed = %s"
+        params = (confirmed,)
+    query += " ORDER BY m.created_at DESC"
+    df = pd.read_sql(query, conn, params=params)
+    conn.close()
+    return df
+
+
 def confirm_match(match_id: int):
     conn = get_connection()
     cursor = conn.cursor()

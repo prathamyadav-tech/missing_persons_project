@@ -1,0 +1,30 @@
+# Virtual environments
+venv/
+venv311/
+*/venv/
+*/venv311/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# DeepFace downloaded model weights (large files, re-downloadable)
+.deepface/
+
+# Uploaded photos (demo data — don't need to be in the repo)
+uploads/missing/*
+uploads/unidentified/*
+!uploads/missing/.gitkeep
+!uploads/unidentified/.gitkeep
+
+# Database credentials (if you ever hardcode a password instead of using env vars)
+# db_config.py   <-- uncomment this line if you put a real password directly in the file
+
+# OS / Editor files
+.DS_Store
+Thumbs.db
+.vscode/settings.json
+
+# Test photos (personal test images, not part of the actual project data)
+test_photos/

@@ -7,9 +7,11 @@ import os
 import uuid
 import streamlit as st
 from database import insert_missing_person
+from style import inject_custom_css, page_header
 
-st.set_page_config(page_title="Police Form", page_icon="🚓")
-st.title("🚓 Report a Missing Person")
+st.set_page_config(page_title="Police Form", page_icon="🚓", layout="wide")
+inject_custom_css()
+page_header("🚓 Report a Missing Person", "Fill in the details below — takes under 2 minutes")
 
 UPLOAD_DIR = "uploads/missing"
 os.makedirs(UPLOAD_DIR, exist_ok=True)

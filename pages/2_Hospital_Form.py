@@ -5,9 +5,11 @@ import os
 import uuid
 import streamlit as st
 from database import insert_unidentified_body
+from style import inject_custom_css, page_header
 
-st.set_page_config(page_title="Hospital Form", page_icon="🏥")
-st.title("🏥 Report an Unidentified Body")
+st.set_page_config(page_title="Hospital Form", page_icon="🏥", layout="wide")
+inject_custom_css()
+page_header("🏥 Report an Unidentified Body", "Fill in the details below — takes under 2 minutes")
 
 UPLOAD_DIR = "uploads/unidentified"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
